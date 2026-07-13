@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/*.db
+node_modules/
+dist/
+build/
+.env
+*.egg-info/
+.pytest_cache/
+artifacts/runs/
+agents/*/memory/
+playwright/test-results/
+playwright/playwright-report/
+.DS_Store
+.claude/

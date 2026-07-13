@@ -1,0 +1,25 @@
+# Orchestrator transition table (see docs/architecture/design.md SS5).
+# States with no entry here (awaiting_approval, completed, rejected,
+# revision_limit_exceeded) are human-gated or terminal -- the engine stops
+# walking the table and waits for an API call (approve/reject) or ends the run.
+transitions:
+  - from: prd_received
+    agent: test_case_generator
+    on_success: awaiting_approval
+
+  - from: approved
+    agent: automation
+    on_success: under_review
+
+  - from: under_review
+    agent: reviewer
+    on_approved: completed
+    on_rejected: revision_needed
+
+  - from: revision_needed
+    agent: automation
+    on_success: under_review
+
+revision:
+  max_attempts: 3
+  on_limit_exceeded: revision_limit_exceeded

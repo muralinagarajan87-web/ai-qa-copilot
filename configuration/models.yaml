@@ -1,0 +1,29 @@
+# LLM provider routing. The active provider is fully configuration-driven --
+# switching providers is a change to this file only. No agent code changes
+# are required either way (agents depend on llm/provider.py's LLMProvider
+# protocol, never on a concrete client).
+#
+# Groq is the default: low-latency cloud inference, used for day-to-day
+# development and live demos. Ollama remains fully supported for
+# offline/local-only deployments -- to run 100% locally (matching the
+# original "no cloud" constraint), comment out the groq block and
+# uncomment the ollama block below. Requires GROQ_API_KEY in the
+# environment when using groq -- see .env.example.
+default:
+  provider: groq
+  model: llama-3.3-70b-versatile
+# default:
+#   provider: ollama
+#   model: qwen2.5
+
+# Embeddings always go through a dedicated embedding-capable provider --
+# Groq has no embeddings endpoint, so this is independent of whichever
+# provider is generating text above (see llm/router.py get_embedding_provider()).
+embedding:
+  provider: ollama
+  model: nomic-embed-text
+
+# Per-agent overrides (provider/model only, e.g. to pin one agent to Ollama
+# while others use Groq). Temperature and other generation tuning live in
+# each agent's own agents/<name>/config.yaml, not here.
+agents: {}

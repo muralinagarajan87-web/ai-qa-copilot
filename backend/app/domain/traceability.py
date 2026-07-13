@@ -8,12 +8,20 @@ from pydantic import BaseModel
 from agents.base.schemas import ArtifactKind, WorkflowState
 from services.artifact_manager import ArtifactManager
 
+# The only test types this agent actually generates and reasons about.
+# Coverage is reported strictly against this list -- not against
+# Security/Accessibility/Performance/API, which this agent has no real basis
+# to assess from a plain PRD. A checkbox for a capability that doesn't exist
+# would be worse than no checkbox at all.
+_COVERAGE_TEST_TYPES = ["functional", "negative", "edge_case", "regression", "smoke"]
+
 
 class TraceabilityRow(BaseModel):
     requirement_id: str
     requirement_description: str
     module: str
     test_case_ids: list[str]
+    coverage: dict[str, bool]
     automation_status: Literal["pending", "generated"]
     reviewer_status: Literal["pending", "approved", "changes_requested", "limit_exceeded"]
 
@@ -48,8 +56,11 @@ class TraceabilityMatrixBuilder:
         test_cases = test_case_data.get("test_cases", [])
 
         test_case_ids_by_requirement: dict[str, list[str]] = {}
+        test_types_by_requirement: dict[str, set[str]] = {}
         for test_case in test_cases:
-            test_case_ids_by_requirement.setdefault(test_case["requirement_id"], []).append(test_case["test_id"])
+            requirement_id = test_case["requirement_id"]
+            test_case_ids_by_requirement.setdefault(requirement_id, []).append(test_case["test_id"])
+            test_types_by_requirement.setdefault(requirement_id, set()).add(test_case["test_type"])
 
         automation_status = self._automation_status(run_id)
         reviewer_status = self._reviewer_status(run_id, run_state)
@@ -60,6 +71,10 @@ class TraceabilityMatrixBuilder:
                 requirement_description=requirement["description"],
                 module=requirement["module"],
                 test_case_ids=test_case_ids_by_requirement.get(requirement["requirement_id"], []),
+                coverage={
+                    test_type: test_type in test_types_by_requirement.get(requirement["requirement_id"], set())
+                    for test_type in _COVERAGE_TEST_TYPES
+                },
                 automation_status=automation_status,
                 reviewer_status=reviewer_status,
             )

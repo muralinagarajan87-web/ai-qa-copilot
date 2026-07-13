@@ -46,9 +46,32 @@ class Requirement(ExtractedRequirement):
 # it to drift/paraphrase inconsistently; a lookup can't drift.
 
 
+class TestStep(BaseModel):
+    action: str
+    expected: str
+
+
+class AutomationHints(BaseModel):
+    """Advisory hints for the future Automation Agent -- semantic element
+    names and intended Playwright actions/assertions, NOT final selectors.
+    No real DOM or design-system component library exists at test-case-
+    generation time; the Automation Agent is expected to resolve these
+    against real Page Objects (via the RAG pom_library lookup once
+    knowledge/ ships) rather than trust them as literal locators.
+    """
+
+    page_object: str | None = None
+    locators: list[str] = Field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
+    assertions: list[str] = Field(default_factory=list)
+    complexity: Literal["low", "medium", "high"] | None = None
+    estimated_minutes: int | None = None
+
+
 class AutomationAssessment(BaseModel):
     candidate: bool
     reason: str
+    hints: AutomationHints | None = None
 
 
 class GeneratedTestCase(BaseModel):
@@ -60,12 +83,19 @@ class GeneratedTestCase(BaseModel):
     severity: Literal["critical", "major", "minor", "trivial"]
     preconditions: list[str]
     test_data: dict[str, str] = Field(default_factory=dict)
-    steps: list[str]
+    steps: list[TestStep]
     expected_result: str
     test_type: Literal["functional", "regression", "smoke", "edge_case", "negative"]
+    tags: list[str] = Field(default_factory=list)
+    # 1-based positions into this same generation batch's test_cases list --
+    # the LLM can't reference final test_ids because it doesn't know them
+    # yet (they're assigned by the agent after generation, same as
+    # requirement_id). Resolved to real TC-xxx ids in TestCaseGeneratorAgent.
+    depends_on_index: list[int] = Field(default_factory=list)
     automation: AutomationAssessment
     risk: Literal["low", "medium", "high"]
     confidence: Literal["high", "medium", "low"]
+    confidence_reason: str
 
 
 class GeneratedTestCases(BaseModel):
@@ -73,11 +103,28 @@ class GeneratedTestCases(BaseModel):
     coverage_notes: str | None = None
 
 
-class TestCase(GeneratedTestCase):
+class TestCase(BaseModel):
     test_id: str
+    requirement_id: str
     requirement_description: str
     source_reference: str | None = None
     module: str
+    feature: str | None = None
+    description: str
+    test_objective: str
+    priority: Literal["P0", "P1", "P2", "P3"]
+    severity: Literal["critical", "major", "minor", "trivial"]
+    preconditions: list[str]
+    test_data: dict[str, str] = Field(default_factory=dict)
+    steps: list[TestStep]
+    expected_result: str
+    test_type: Literal["functional", "regression", "smoke", "edge_case", "negative"]
+    tags: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)
+    automation: AutomationAssessment
+    risk: Literal["low", "medium", "high"]
+    confidence: Literal["high", "medium", "low"]
+    confidence_reason: str
 
 
 class TestCaseGeneratorOutput(BaseModel):

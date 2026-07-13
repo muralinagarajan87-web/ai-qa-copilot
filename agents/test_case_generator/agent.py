@@ -4,6 +4,7 @@ from agents.base.base_agent import BaseAgent
 from agents.base.schemas import ArtifactKind, ValidationResult, WorkflowContext
 from agents.test_case_generator.schemas import (
     ExtractedRequirements,
+    GeneratedTestCase,
     GeneratedTestCases,
     Requirement,
     TestCase,
@@ -68,6 +69,11 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
         generated = GeneratedTestCases.model_validate(response.parsed)
         requirements_by_id = {requirement.requirement_id: requirement for requirement in requirements}
 
+        # test_id assignment is purely positional, so the full position -> id
+        # map can be built upfront and used both for each test case's own id
+        # and for resolving depends_on_index -> depends_on below.
+        test_ids_by_position = {index + 1: f"TC-{index + 1:03d}" for index in range(len(generated.test_cases))}
+
         test_cases: list[TestCase] = []
         for index, draft in enumerate(generated.test_cases):
             requirement = requirements_by_id.get(draft.requirement_id)
@@ -76,16 +82,47 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
                     f"Generated test case referenced unknown requirement_id '{draft.requirement_id}' "
                     f"(known: {sorted(requirements_by_id)})"
                 )
+            test_id = test_ids_by_position[index + 1]
+            depends_on = self._resolve_dependencies(index + 1, draft, test_ids_by_position)
+
             test_cases.append(
                 TestCase(
-                    test_id=f"TC-{index + 1:03d}",
+                    test_id=test_id,
+                    requirement_id=draft.requirement_id,
                     requirement_description=requirement.description,
                     source_reference=requirement.source_reference,
                     module=requirement.module,
-                    **draft.model_dump(),
+                    feature=draft.feature,
+                    description=draft.description,
+                    test_objective=draft.test_objective,
+                    priority=draft.priority,
+                    severity=draft.severity,
+                    preconditions=draft.preconditions,
+                    test_data=draft.test_data,
+                    steps=draft.steps,
+                    expected_result=draft.expected_result,
+                    test_type=draft.test_type,
+                    tags=draft.tags,
+                    depends_on=depends_on,
+                    automation=draft.automation,
+                    risk=draft.risk,
+                    confidence=draft.confidence,
+                    confidence_reason=draft.confidence_reason,
                 )
             )
         return test_cases, generated.coverage_notes
+
+    def _resolve_dependencies(
+        self, own_position: int, draft: GeneratedTestCase, test_ids_by_position: dict[int, str]
+    ) -> list[str]:
+        resolved: list[str] = []
+        for position in draft.depends_on_index:
+            if position == own_position:
+                continue
+            target_id = test_ids_by_position.get(position)
+            if target_id is not None and target_id not in resolved:
+                resolved.append(target_id)
+        return resolved
 
     def validate(self, output: TestCaseGeneratorOutput) -> ValidationResult:
         errors: list[str] = []
@@ -99,6 +136,7 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
         if not output.test_cases:
             errors.append("No test cases were generated")
 
+        known_test_ids = {test_case.test_id for test_case in output.test_cases}
         for test_case in output.test_cases:
             if test_case.test_id in seen_test_ids:
                 errors.append(f"Duplicate test_id: {test_case.test_id}")
@@ -114,6 +152,11 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
                 errors.append(f"{test_case.test_id}: missing expected result")
             if not test_case.preconditions:
                 warnings.append(f"{test_case.test_id}: no preconditions specified")
+            for dependency_id in test_case.depends_on:
+                if dependency_id not in known_test_ids:
+                    errors.append(f"{test_case.test_id}: depends_on references unknown test_id '{dependency_id}'")
+            if test_case.automation.candidate and test_case.automation.hints is None:
+                warnings.append(f"{test_case.test_id}: flagged as automation candidate but has no automation hints")
 
         for requirement_id in sorted(known_requirement_ids - covered_requirement_ids):
             warnings.append(f"{requirement_id}: no test case references this requirement")
@@ -158,6 +201,11 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
         self.artifact_manager.file_service.write(path, markdown, run_id)
 
     def _render_markdown(self, output: TestCaseGeneratorOutput) -> str:
+        """Human-readable QA document. Automation hints (locators/actions/
+        assertions/complexity) are deliberately excluded here -- they are
+        machine-facing detail for the Automation Agent, not something a
+        manual QA reviewer needs to read through.
+        """
         lines: list[str] = [
             "# Manual Test Cases",
             "",
@@ -185,9 +233,9 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
         for test_case in output.test_cases:
             module_line = test_case.module if not test_case.feature else f"{test_case.module} / {test_case.feature}"
             precondition_lines = [f"- {item}" for item in test_case.preconditions] or ["- None"]
-            test_data_lines = [f"- {key}: {value}" for key, value in test_case.test_data.items()] or ["- None"]
-            step_lines = [f"{index + 1}. {step}" for index, step in enumerate(test_case.steps)]
             automation_flag = "Yes" if test_case.automation.candidate else "No"
+            tags_line = " ".join(f"`@{tag}`" for tag in test_case.tags) or "None"
+            depends_line = ", ".join(test_case.depends_on) or "None"
 
             lines += [f"### {test_case.test_id} -- {test_case.description}", ""]
             lines += [f"**Requirement ID**  \n{test_case.requirement_id}", ""]
@@ -197,14 +245,31 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
             lines += [f"**Module / Feature**  \n{module_line}", ""]
             lines += [f"**Test Objective**  \n{test_case.test_objective}", ""]
             lines += ["**Preconditions**", *precondition_lines, ""]
-            lines += ["**Test Data**", *test_data_lines, ""]
-            lines += ["**Test Steps**", *step_lines, ""]
-            lines += [f"**Expected Result**  \n{test_case.expected_result}", ""]
+
+            lines += ["**Test Data**", ""]
+            if test_case.test_data:
+                lines += ["| Field | Value |", "|---|---|"]
+                lines += [f"| {key} | {value} |" for key, value in test_case.test_data.items()]
+            else:
+                lines += ["None"]
+            lines += [""]
+
+            lines += ["**Test Steps**", "", "| Step | Action | Expected Result |", "|---|---|---|"]
+            lines += [
+                f"| {step_index + 1} | {step.action} | {step.expected} |"
+                for step_index, step in enumerate(test_case.steps)
+            ]
+            lines += [""]
+
+            lines += [f"**Expected Result (Overall)**  \n{test_case.expected_result}", ""]
             lines += [
                 f"**Priority:** {test_case.priority} &nbsp;|&nbsp; **Severity:** {test_case.severity} "
-                f"&nbsp;|&nbsp; **Risk:** {test_case.risk} &nbsp;|&nbsp; **Confidence:** {test_case.confidence}",
+                f"&nbsp;|&nbsp; **Risk:** {test_case.risk} &nbsp;|&nbsp; **Confidence:** {test_case.confidence} "
+                f"({test_case.confidence_reason})",
                 "",
             ]
+            lines += [f"**Tags:** {tags_line}", ""]
+            lines += [f"**Depends On:** {depends_line}", ""]
             lines += [
                 f"**Automation Candidate:** {automation_flag} -- {test_case.automation.reason}",
                 "",

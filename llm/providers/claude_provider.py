@@ -7,8 +7,11 @@ from llm.provider import LLMResponse
 
 class ClaudeProvider:
     """Structural stub satisfying LLMProvider -- see openai_provider.py for
-    rationale. Not used while this project runs local-only via Ollama.
+    rationale. Groq and Ollama are the two implemented, supported providers
+    today.
     """
+
+    provider_name = "claude"
 
     def __init__(self, model: str, **_: object):
         self.model = model
@@ -21,7 +24,7 @@ class ClaudeProvider:
         temperature: float = 0.2,
         response_schema: type[BaseModel] | None = None,
     ) -> LLMResponse:
-        raise NotImplementedError("ClaudeProvider is a structural stub -- this project runs local-only via Ollama")
+        raise NotImplementedError("ClaudeProvider is a structural stub -- not yet implemented")
 
     def embed(self, text: str) -> list[float]:
-        raise NotImplementedError("ClaudeProvider is a structural stub -- this project runs local-only via Ollama")
+        raise NotImplementedError("ClaudeProvider is a structural stub -- not yet implemented")

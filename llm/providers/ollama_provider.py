@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
 
 import httpx
 from pydantic import BaseModel
 
-from llm.provider import LLMResponse
+from llm.provider import LLMResponse, TokenUsage
 
 
 class OllamaProvider:
@@ -22,6 +23,8 @@ class OllamaProvider:
     default timeout here is generous; raise it further via the `timeout`
     kwarg for larger models or larger outputs.
     """
+
+    provider_name = "ollama"
 
     def __init__(
         self,
@@ -55,13 +58,24 @@ class OllamaProvider:
         if response_schema is not None:
             payload["format"] = response_schema.model_json_schema()
 
+        started = time.monotonic()
         response = self._client.post(f"{self.host}/api/generate", json=payload)
+        latency_ms = (time.monotonic() - started) * 1000
         response.raise_for_status()
         data = response.json()
         text = data.get("response", "")
 
         parsed = json.loads(text) if response_schema is not None else None
-        return LLMResponse(text=text, model=self.model, parsed=parsed)
+        usage = TokenUsage(
+            prompt_tokens=data.get("prompt_eval_count"),
+            completion_tokens=data.get("eval_count"),
+            total_tokens=(
+                (data.get("prompt_eval_count") or 0) + (data.get("eval_count") or 0)
+                if data.get("prompt_eval_count") is not None or data.get("eval_count") is not None
+                else None
+            ),
+        )
+        return LLMResponse(text=text, model=self.model, parsed=parsed, usage=usage, latency_ms=latency_ms)
 
     def embed(self, text: str) -> list[float]:
         response = self._client.post(

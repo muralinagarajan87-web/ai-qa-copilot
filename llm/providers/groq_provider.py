@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 import httpx
 from pydantic import BaseModel
 
-from llm.provider import LLMResponse
+from llm.provider import LLMResponse, TokenUsage
 
 
 class GroqProvider:
@@ -21,6 +22,8 @@ class GroqProvider:
     embedding-capable provider (Ollama by default) regardless of which
     provider is generating text; see llm/router.py get_embedding_provider().
     """
+
+    provider_name = "groq"
 
     def __init__(self, model: str, *, host: str = "https://api.groq.com/openai/v1", timeout: float = 60.0):
         api_key = os.environ.get("GROQ_API_KEY")
@@ -58,13 +61,21 @@ class GroqProvider:
         if response_schema is not None:
             payload["response_format"] = {"type": "json_object"}
 
+        started = time.monotonic()
         response = self._client.post(f"{self.host}/chat/completions", json=payload)
+        latency_ms = (time.monotonic() - started) * 1000
         response.raise_for_status()
         data = response.json()
         text = data["choices"][0]["message"]["content"]
 
         parsed = json.loads(text) if response_schema is not None else None
-        return LLMResponse(text=text, model=self.model, parsed=parsed)
+        raw_usage = data.get("usage") or {}
+        usage = TokenUsage(
+            prompt_tokens=raw_usage.get("prompt_tokens"),
+            completion_tokens=raw_usage.get("completion_tokens"),
+            total_tokens=raw_usage.get("total_tokens"),
+        )
+        return LLMResponse(text=text, model=self.model, parsed=parsed, usage=usage, latency_ms=latency_ms)
 
     def embed(self, text: str) -> list[float]:
         raise NotImplementedError(

@@ -4,11 +4,13 @@ import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi.responses import PlainTextResponse
 
 from agents.base.schemas import ArtifactKind
 from backend.app.api.deps import get_container
 from backend.app.core.container import Container
 from backend.app.domain.revision_history import RevisionHistory, RevisionHistoryBuilder
+from backend.app.domain.traceability import TraceabilityMatrix, TraceabilityMatrixBuilder
 from backend.app.domain.workflow_run import WorkflowRun
 from backend.app.orchestrator.engine import OrchestratorError
 from services.interfaces import DiffResult
@@ -89,3 +91,32 @@ def get_revision_history(run_id: str, container: Container = Depends(get_contain
         max_attempts=container.orchestrator.config.revision.max_attempts,
         run_state=run.state,
     )
+
+
+@router.get("/{run_id}/traceability", response_model=TraceabilityMatrix)
+def get_traceability_matrix(run_id: str, container: Container = Depends(get_container)) -> TraceabilityMatrix:
+    run = container.orchestrator.run_repository.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"No such run: {run_id}")
+    builder = TraceabilityMatrixBuilder(container.artifact_manager)
+    return builder.build(run_id, run_state=run.state)
+
+
+@router.get("/{run_id}/test-cases/report")
+def get_test_cases_report(run_id: str, container: Container = Depends(get_container)) -> PlainTextResponse:
+    path = f"artifacts/runs/{run_id}/test_cases/Manual_TestCases.md"
+    try:
+        content = container.file_service.read(path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="No manual test case report yet for this run") from exc
+    return PlainTextResponse(content, media_type="text/markdown")
+
+
+@router.get("/{run_id}/llm-calls")
+def get_llm_calls(run_id: str, container: Container = Depends(get_container)) -> list[dict]:
+    calls: list[dict] = []
+    for agent_name in container.agent_registry.list_agents():
+        agent = container.agent_registry.get(agent_name)
+        calls.extend(agent.read_llm_calls(run_id))
+    calls.sort(key=lambda call: call.get("timestamp", ""))
+    return calls

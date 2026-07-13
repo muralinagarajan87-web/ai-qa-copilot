@@ -21,16 +21,40 @@ class TestCaseGeneratorInput(BaseModel):
 # point of a traceability matrix. Extraction happens as its own LLM call so
 # the requirement list is stable and de-duplicated before any test case
 # generation references it.
+#
+# requirement_type drives Stage B's decomposition depth: "validation"
+# requirements get deep boundary/format scenario decomposition, while
+# "ui_behavior"/"business_rule" get the minimal meaningful set. This is what
+# makes coverage scenario-driven instead of a flat "one or more per
+# requirement" instruction.
+
+
+class RequirementGap(BaseModel):
+    topic: str
+    description: str
+    recommendation: str
 
 
 class ExtractedRequirement(BaseModel):
     description: str
     source_reference: str | None = None
     module: str
+    requirement_type: Literal[
+        "functional", "business_rule", "validation", "ui_behavior", "security", "accessibility", "integration", "performance"
+    ]
 
 
 class ExtractedRequirements(BaseModel):
+    """Stage A output. ambiguities/gaps/assumptions are the model reflecting
+    on the PRD itself, not on the requirements it extracted -- this is what
+    turns the agent from a pure test-case generator into a lightweight
+    requirements-quality reviewer as well.
+    """
+
     requirements: list[ExtractedRequirement]
+    ambiguities: list[str] = Field(default_factory=list)
+    gaps: list[RequirementGap] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
 
 
 class Requirement(ExtractedRequirement):
@@ -85,7 +109,11 @@ class GeneratedTestCase(BaseModel):
     test_data: dict[str, str] = Field(default_factory=dict)
     steps: list[TestStep]
     expected_result: str
-    test_type: Literal["functional", "regression", "smoke", "edge_case", "negative"]
+    post_conditions: list[str] = Field(default_factory=list)
+    # Only true scenario categories -- regression/smoke are execution
+    # classifications of a scenario, not scenarios themselves, and are
+    # expressed as tags (@regression, @smoke, @sanity) instead.
+    test_type: Literal["functional", "negative", "edge_case"]
     tags: list[str] = Field(default_factory=list)
     # 1-based positions into this same generation batch's test_cases list --
     # the LLM can't reference final test_ids because it doesn't know them
@@ -118,7 +146,8 @@ class TestCase(BaseModel):
     test_data: dict[str, str] = Field(default_factory=dict)
     steps: list[TestStep]
     expected_result: str
-    test_type: Literal["functional", "regression", "smoke", "edge_case", "negative"]
+    post_conditions: list[str] = Field(default_factory=list)
+    test_type: Literal["functional", "negative", "edge_case"]
     tags: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     automation: AutomationAssessment
@@ -133,3 +162,6 @@ class TestCaseGeneratorOutput(BaseModel):
     requirements: list[Requirement]
     test_cases: list[TestCase]
     coverage_notes: str | None = None
+    ambiguities: list[str] = Field(default_factory=list)
+    gaps: list[RequirementGap] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)

@@ -7,10 +7,17 @@ from agents.test_case_generator.schemas import (
     GeneratedTestCase,
     GeneratedTestCases,
     Requirement,
+    RequirementGap,
     TestCase,
     TestCaseGeneratorInput,
     TestCaseGeneratorOutput,
 )
+
+# Requirement types that warrant deep scenario decomposition -- below this
+# threshold, validate() warns that a validation-type requirement may be
+# under-tested. This turns "coverage should be scenario-driven" into an
+# actual quality gate the agent checks against itself, not just prompt talk.
+_MIN_TEST_CASES_FOR_VALIDATION_REQUIREMENT = 6
 
 
 class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGeneratorOutput]):
@@ -26,7 +33,8 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
         temperature = self.config.get("temperature", 0.2)
         requirements_prompt = self._load_prompt_file(self.config.get("requirements_prompt", "requirements_v1.md"))
 
-        requirements = self._extract_requirements(prd_text, input.module_hint, requirements_prompt, temperature, context)
+        extraction = self._extract_requirements(prd_text, input.module_hint, requirements_prompt, temperature, context)
+        requirements, ambiguities, gaps, assumptions = extraction
         test_cases, coverage_notes = self._generate_test_cases(requirements, temperature, context)
 
         output = TestCaseGeneratorOutput(
@@ -35,13 +43,16 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
             requirements=requirements,
             test_cases=test_cases,
             coverage_notes=coverage_notes,
+            ambiguities=ambiguities,
+            gaps=gaps,
+            assumptions=assumptions,
         )
         self._write_human_report(context.run_id, output)
         return output
 
     def _extract_requirements(
         self, prd_text: str, module_hint: str | None, requirements_prompt: str, temperature: float, context: WorkflowContext
-    ) -> list[Requirement]:
+    ) -> tuple[list[Requirement], list[str], list[RequirementGap], list[str]]:
         prompt = self._build_extraction_prompt(prd_text, module_hint)
         response = self.llm.generate(
             prompt, system=requirements_prompt, temperature=temperature, response_schema=ExtractedRequirements
@@ -52,10 +63,11 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
         if not extracted.requirements:
             raise RuntimeError("No requirements could be extracted from the source document")
 
-        return [
+        requirements = [
             Requirement(requirement_id=f"REQ-{index + 1:03d}", **draft.model_dump())
             for index, draft in enumerate(extracted.requirements)
         ]
+        return requirements, extracted.ambiguities, extracted.gaps, extracted.assumptions
 
     def _generate_test_cases(
         self, requirements: list[Requirement], temperature: float, context: WorkflowContext
@@ -101,6 +113,7 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
                     test_data=draft.test_data,
                     steps=draft.steps,
                     expected_result=draft.expected_result,
+                    post_conditions=draft.post_conditions,
                     test_type=draft.test_type,
                     tags=draft.tags,
                     depends_on=depends_on,
@@ -127,9 +140,9 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
     def validate(self, output: TestCaseGeneratorOutput) -> ValidationResult:
         errors: list[str] = []
         warnings: list[str] = []
-        known_requirement_ids = {requirement.requirement_id for requirement in output.requirements}
+        requirements_by_id = {requirement.requirement_id: requirement for requirement in output.requirements}
         seen_test_ids: set[str] = set()
-        covered_requirement_ids: set[str] = set()
+        test_case_count_by_requirement: dict[str, int] = {}
 
         if not output.requirements:
             errors.append("No requirements were extracted")
@@ -142,9 +155,11 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
                 errors.append(f"Duplicate test_id: {test_case.test_id}")
             seen_test_ids.add(test_case.test_id)
 
-            if test_case.requirement_id not in known_requirement_ids:
+            if test_case.requirement_id not in requirements_by_id:
                 errors.append(f"{test_case.test_id}: references unknown requirement_id '{test_case.requirement_id}'")
-            covered_requirement_ids.add(test_case.requirement_id)
+            test_case_count_by_requirement[test_case.requirement_id] = (
+                test_case_count_by_requirement.get(test_case.requirement_id, 0) + 1
+            )
 
             if not test_case.steps:
                 errors.append(f"{test_case.test_id}: no test steps")
@@ -158,8 +173,15 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
             if test_case.automation.candidate and test_case.automation.hints is None:
                 warnings.append(f"{test_case.test_id}: flagged as automation candidate but has no automation hints")
 
-        for requirement_id in sorted(known_requirement_ids - covered_requirement_ids):
-            warnings.append(f"{requirement_id}: no test case references this requirement")
+        for requirement_id, requirement in requirements_by_id.items():
+            count = test_case_count_by_requirement.get(requirement_id, 0)
+            if count == 0:
+                warnings.append(f"{requirement_id}: no test case references this requirement")
+            elif requirement.requirement_type == "validation" and count < _MIN_TEST_CASES_FOR_VALIDATION_REQUIREMENT:
+                warnings.append(
+                    f"{requirement_id}: validation requirement has only {count} test case(s) -- likely "
+                    f"under-decomposed (consider boundary/format/whitespace/case variants)"
+                )
 
         return ValidationResult(is_valid=not errors, errors=errors, warnings=warnings)
 
@@ -175,6 +197,8 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
             f"generated {len(output.test_cases)} test cases ({priority_summary})",
             f"{automatable} flagged as automation candidates",
         ]
+        if output.gaps:
+            parts.append(f"{len(output.gaps)} requirement gaps identified")
         if output.coverage_notes:
             parts.append(f"Coverage notes: {output.coverage_notes}")
         return " | ".join(parts)
@@ -191,6 +215,7 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
             lines.append(
                 f"- requirement_id: {requirement.requirement_id}\n"
                 f"  module: {requirement.module}\n"
+                f"  requirement_type: {requirement.requirement_type}\n"
                 f"  description: {requirement.description}"
             )
         return "\n".join(lines)
@@ -216,6 +241,17 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
         if output.coverage_notes:
             lines += [f"**Coverage notes:** {output.coverage_notes}", ""]
 
+        if output.ambiguities or output.gaps or output.assumptions:
+            lines += ["## PRD Quality Analysis", ""]
+            if output.ambiguities:
+                lines += ["**Ambiguities**", *[f"- {item}" for item in output.ambiguities], ""]
+            if output.gaps:
+                lines += ["**Requirement Gaps**", "", "| Topic | Gap | Recommendation |", "|---|---|---|"]
+                lines += [f"| {gap.topic} | {gap.description} | {gap.recommendation} |" for gap in output.gaps]
+                lines += [""]
+            if output.assumptions:
+                lines += ["**Assumptions Made**", *[f"- {item}" for item in output.assumptions], ""]
+
         lines += [
             "## Summary",
             "",
@@ -233,9 +269,15 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
         for test_case in output.test_cases:
             module_line = test_case.module if not test_case.feature else f"{test_case.module} / {test_case.feature}"
             precondition_lines = [f"- {item}" for item in test_case.preconditions] or ["- None"]
-            automation_flag = "Yes" if test_case.automation.candidate else "No"
+            postcondition_lines = [f"- {item}" for item in test_case.post_conditions] or ["- None"]
             tags_line = " ".join(f"`@{tag}`" for tag in test_case.tags) or "None"
             depends_line = ", ".join(test_case.depends_on) or "None"
+
+            if test_case.automation.candidate:
+                complexity = test_case.automation.hints.complexity if test_case.automation.hints else None
+                execution_line = f"Automation ({complexity} complexity)" if complexity else "Automation"
+            else:
+                execution_line = "Manual"
 
             lines += [f"### {test_case.test_id} -- {test_case.description}", ""]
             lines += [f"**Requirement ID**  \n{test_case.requirement_id}", ""]
@@ -262,6 +304,7 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
             lines += [""]
 
             lines += [f"**Expected Result (Overall)**  \n{test_case.expected_result}", ""]
+            lines += ["**Post-Conditions**", *postcondition_lines, ""]
             lines += [
                 f"**Priority:** {test_case.priority} &nbsp;|&nbsp; **Severity:** {test_case.severity} "
                 f"&nbsp;|&nbsp; **Risk:** {test_case.risk} &nbsp;|&nbsp; **Confidence:** {test_case.confidence} "
@@ -271,7 +314,7 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
             lines += [f"**Tags:** {tags_line}", ""]
             lines += [f"**Depends On:** {depends_line}", ""]
             lines += [
-                f"**Automation Candidate:** {automation_flag} -- {test_case.automation.reason}",
+                f"**Execution:** {execution_line} -- {test_case.automation.reason}",
                 "",
                 "---",
                 "",

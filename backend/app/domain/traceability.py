@@ -8,12 +8,14 @@ from pydantic import BaseModel
 from agents.base.schemas import ArtifactKind, WorkflowState
 from services.artifact_manager import ArtifactManager
 
-# The only test types this agent actually generates and reasons about.
-# Coverage is reported strictly against this list -- not against
-# Security/Accessibility/Performance/API, which this agent has no real basis
-# to assess from a plain PRD. A checkbox for a capability that doesn't exist
-# would be worse than no checkbox at all.
-_COVERAGE_TEST_TYPES = ["functional", "negative", "edge_case", "regression", "smoke"]
+# The only test_type scenario categories this agent generates. regression
+# and smoke are execution classifications applied as tags (see
+# agents/test_case_generator/prompts/v5.md), not scenario categories, so
+# they aren't tracked here. Coverage is reported strictly against this list
+# -- not against Security/Accessibility/Performance/API, which this agent
+# has no real basis to assess from a plain PRD. A checkbox for a capability
+# that doesn't exist would be worse than no checkbox at all.
+_COVERAGE_TEST_TYPES = ["functional", "negative", "edge_case"]
 
 
 class TraceabilityRow(BaseModel):

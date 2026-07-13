@@ -25,7 +25,14 @@ class GroqProvider:
 
     provider_name = "groq"
 
-    def __init__(self, model: str, *, host: str = "https://api.groq.com/openai/v1", timeout: float = 60.0):
+    def __init__(
+        self,
+        model: str,
+        *,
+        host: str = "https://api.groq.com/openai/v1",
+        timeout: float = 60.0,
+        max_tokens: int = 8000,
+    ):
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise RuntimeError(
@@ -34,6 +41,7 @@ class GroqProvider:
             )
         self.model = model
         self.host = host.rstrip("/")
+        self.max_tokens = max_tokens
         self._client = httpx.Client(timeout=timeout, headers={"Authorization": f"Bearer {api_key}"})
 
     def generate(
@@ -57,7 +65,12 @@ class GroqProvider:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        payload: dict = {"model": self.model, "messages": messages, "temperature": temperature}
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": self.max_tokens,
+        }
         if response_schema is not None:
             payload["response_format"] = {"type": "json_object"}
 
@@ -66,7 +79,14 @@ class GroqProvider:
         latency_ms = (time.monotonic() - started) * 1000
         response.raise_for_status()
         data = response.json()
-        text = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        text = choice["message"]["content"]
+
+        if choice.get("finish_reason") == "length":
+            raise RuntimeError(
+                f"Groq response was truncated at max_tokens={self.max_tokens} before finishing -- "
+                "the requested output was too large. Increase GroqProvider's max_tokens."
+            )
 
         parsed = json.loads(text) if response_schema is not None else None
         raw_usage = data.get("usage") or {}

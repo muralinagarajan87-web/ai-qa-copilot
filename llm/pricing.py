@@ -9,6 +9,8 @@ from llm.provider import TokenUsage
 _GROQ_PRICING_PER_MILLION: dict[str, tuple[float, float]] = {
     "llama-3.3-70b-versatile": (0.59, 0.79),
     "llama-3.1-8b-instant": (0.05, 0.08),
+    "openai/gpt-oss-120b": (0.15, 0.60),
+    "meta-llama/llama-4-scout-17b-16e-instruct": (0.11, 0.34),
 }
 
 

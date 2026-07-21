@@ -5,9 +5,6 @@
 # Add a new agent by adding an entry here plus the agent module itself;
 # no changes to backend/app/orchestrator/engine.py are required.
 #
-# automation:
-#   module: agents.automation_agent.agent:AutomationAgent
-#   config: agents/automation_agent/config.yaml
 # reviewer:
 #   module: agents.reviewer_agent.agent:ReviewerAgent
 #   config: agents/reviewer_agent/config.yaml
@@ -15,3 +12,6 @@ agents:
   test_case_generator:
     module: agents.test_case_generator.agent:TestCaseGeneratorAgent
     config: agents/test_case_generator/config.yaml
+  automation:
+    module: agents.automation_agent.agent:AutomationAgent
+    config: agents/automation_agent/config.yaml

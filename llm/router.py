@@ -57,4 +57,6 @@ class LLMRouter:
         kwargs: dict = {"model": entry["model"]}
         if entry["provider"] == "ollama":
             kwargs["embedding_model"] = self._embedding_config.get("model", "nomic-embed-text")
+        if "max_tokens" in entry:
+            kwargs["max_tokens"] = entry["max_tokens"]
         return provider_cls(**kwargs)

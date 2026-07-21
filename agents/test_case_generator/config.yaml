@@ -1,3 +1,11 @@
-prompt_version: v5
+prompt_version: v7
 requirements_prompt: requirements_v2.md
 temperature: 0.2
+# Optional demo/cost control: if set, trims generated test cases down to this
+# count, keeping highest priority first (P0 before P1, etc). Trimming is
+# deterministic post-processing, not an LLM instruction -- LLMs are
+# unreliable at precisely obeying numeric limits, and asking the model to
+# self-limit would fight against the scenario-driven decomposition prompt
+# is already tuned for. Any requirement left with zero surviving test cases
+# after trimming is caught by validate()'s existing coverage-gap warning.
+max_test_cases: 20

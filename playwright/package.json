@@ -1,0 +1,21 @@
+{
+  "name": "ai-qa-copilot-playwright",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "typescript": "^5.6.0",
+    "eslint": "^9.13.0",
+    "eslint-plugin-playwright": "^2.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.11.0",
+    "@typescript-eslint/parser": "^8.11.0",
+    "@eslint/js": "^9.13.0",
+    "globals": "^15.11.0",
+    "@types/node": "^22.7.0"
+  }
+}

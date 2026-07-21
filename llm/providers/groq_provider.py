@@ -10,6 +10,24 @@ from pydantic import BaseModel
 from llm.provider import LLMResponse, TokenUsage
 
 
+class GroqRateLimitError(RuntimeError):
+    """Raised on HTTP 429 or 413 with Groq's own error message surfaced,
+    instead of letting a generic httpx.HTTPStatusError propagate as an
+    opaque 500.
+
+    Groq's free tier enforces requests/minute, tokens/minute, AND
+    tokens/day budgets independently. The per-minute ones show in response
+    headers even on a healthy request; the daily one only appears in the
+    error body when it's actually exceeded, so response headers alone can
+    look fine right up until a request fails. A short backoff only helps
+    for the per-minute limits -- a daily-limit 429 needs an actual wait
+    (see the message's reset time) or a provider switch. A 413 means the
+    single request's prompt + max_tokens exceeds the per-minute ceiling
+    outright -- lowering max_tokens or switching model fixes it; waiting
+    does not.
+    """
+
+
 class GroqProvider:
     """Groq Cloud (OpenAI-compatible chat completions API) -- the default
     provider for development and live demos because of its low latency
@@ -77,6 +95,21 @@ class GroqProvider:
         started = time.monotonic()
         response = self._client.post(f"{self.host}/chat/completions", json=payload)
         latency_ms = (time.monotonic() - started) * 1000
+
+        if response.status_code in (429, 413):
+            # Groq enforces separate per-minute AND per-day token budgets,
+            # and returns 413 (not 429) when a single request's prompt +
+            # max_tokens exceeds the per-minute ceiling outright -- distinct
+            # from "you've used your budget," this means the request itself
+            # doesn't fit regardless of timing, so lowering max_tokens (or
+            # switching model) is the fix, not waiting. The per-minute
+            # budget shows in response headers even when healthy; the
+            # per-day one only surfaces in the error body's message.
+            try:
+                detail = response.json().get("error", {}).get("message", "")
+            except ValueError:
+                detail = ""
+            raise GroqRateLimitError(f"Groq rate limit hit ({response.status_code}): {detail or response.text}")
         response.raise_for_status()
         data = response.json()
         choice = data["choices"][0]

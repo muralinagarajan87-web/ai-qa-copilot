@@ -3,27 +3,45 @@
 # are required either way (agents depend on llm/provider.py's LLMProvider
 # protocol, never on a concrete client).
 #
-# Groq is the default: low-latency cloud inference, used for day-to-day
-# development and live demos. Ollama remains fully supported for
-# offline/local-only deployments -- to run 100% locally (matching the
-# original "no cloud" constraint), comment out the groq block and
-# uncomment the ollama block below. Requires GROQ_API_KEY in the
-# environment when using groq -- see .env.example.
+# meta-llama/llama-4-scout-17b-16e-instruct was our default for a while
+# (30000 TPM headroom) but Groq has since removed it from their model list
+# entirely (GET /openai/v1/models no longer lists it; calls 404). Its
+# replacement, llama-3.3-70b-versatile, initially 413'd on the Automation
+# Agent's largest module prompt (13419 tokens > its 12000 TPM cap -- prompt
+# + max_tokens combined, not a transient rate limit). Tried Ollama
+# (qwen2.5) as a same-family-of-fix workaround, but it isn't capable enough
+# for this task -- it echoed raw prompt markdown into the generated spec
+# file instead of producing valid TypeScript. Trimmed the automation
+# prompt instead (dropped the now-redundant illustrative locator hints
+# whenever a grounded source document is present -- see
+# agent.py::_render_test_case) and reverted to llama-3.3-70b-versatile,
+# which is capable and now fits under the TPM cap.
 default:
   provider: groq
   model: llama-3.3-70b-versatile
 # default:
 #   provider: ollama
 #   model: qwen2.5
+# default:
+#   provider: groq
+#   model: openai/gpt-oss-120b
+# default:
+#   provider: groq
+#   model: llama-3.1-8b-instant
+#   max_tokens: 3000
+# default:
+#   provider: claude
+#   model: claude-sonnet-5
 
 # Embeddings always go through a dedicated embedding-capable provider --
-# Groq has no embeddings endpoint, so this is independent of whichever
-# provider is generating text above (see llm/router.py get_embedding_provider()).
+# neither Claude nor Groq has an embeddings endpoint, so this is independent
+# of whichever provider is generating text above (see llm/router.py
+# get_embedding_provider()).
 embedding:
   provider: ollama
   model: nomic-embed-text
 
-# Per-agent overrides (provider/model only, e.g. to pin one agent to Ollama
-# while others use Groq). Temperature and other generation tuning live in
-# each agent's own agents/<name>/config.yaml, not here.
+# Per-agent overrides (provider/model only). Temperature and other
+# generation tuning live in each agent's own agents/<name>/config.yaml, not
+# here.
 agents: {}

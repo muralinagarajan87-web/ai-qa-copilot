@@ -123,7 +123,24 @@ class TestCaseGeneratorAgent(BaseAgent[TestCaseGeneratorInput, TestCaseGenerator
                     confidence_reason=draft.confidence_reason,
                 )
             )
+        test_cases = self._apply_test_case_cap(test_cases)
         return test_cases, generated.coverage_notes
+
+    def _apply_test_case_cap(self, test_cases: list[TestCase]) -> list[TestCase]:
+        max_test_cases = self.config.get("max_test_cases")
+        if max_test_cases is None or len(test_cases) <= max_test_cases:
+            return test_cases
+
+        # Stable sort by priority string ("P0" < "P1" < "P2" < "P3" sorts
+        # correctly as-is) keeps highest-priority cases; re-sort by test_id
+        # afterward purely for readable output order, not for selection.
+        kept = sorted(test_cases, key=lambda test_case: test_case.priority)[:max_test_cases]
+        kept.sort(key=lambda test_case: test_case.test_id)
+
+        kept_ids = {test_case.test_id for test_case in kept}
+        for test_case in kept:
+            test_case.depends_on = [dep for dep in test_case.depends_on if dep in kept_ids]
+        return kept
 
     def _resolve_dependencies(
         self, own_position: int, draft: GeneratedTestCase, test_ids_by_position: dict[int, str]
